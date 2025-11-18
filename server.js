@@ -5,14 +5,15 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // 🔑 ТВОЙ TELEGRAM
-const TELEGRAM_TOKEN = "8567894849:AAFUfYXmV3YIGWyFcsVEMRL_Y33I7YENGNg";
+const TELEGRAM_TOKEN =
+  "7795199727:AAF3bS3T905-wDuVz0901qp8Wk2p41r3igk";
 const TELEGRAM_CHAT_ID = 619516861;
 
 // МОНЕТЫ И БИРЖИ
 const COINS = ["SOL", "LTC", "XRP", "ADA"];
-const THRESHOLD = 1.3;            // порог спреда в %
-const SPREAD_RESEND_STEP = 0.2;   // на сколько % должен вырасти спред, чтобы снова слать сигнал
-const MIN_RESEND_MINUTES = 3;     // минимум минут между одинаковыми сигналами
+const THRESHOLD = 1.3; // порог спреда в %
+const SPREAD_RESEND_STEP = 0.2; // на сколько % должен вырасти спред, чтобы снова слать сигнал
+const MIN_RESEND_MINUTES = 3; // минимум минут между одинаковыми сигналами
 
 // Пауза между циклами (от 5 до 10 секунд)
 const CHECK_MIN_DELAY_MS = 5000;
@@ -220,7 +221,8 @@ async function checkOnce() {
       // сортируем по цене
       entries.sort((a, b) => a[1] - b[1]);
       const [buyEx, buyPrice] = entries[0]; // самый дешёвый
-      const [sellEx, sellPrice] = entries[entries.length - 1]; // самый дорогой
+      const [sellEx, sellPrice] =
+        entries[entries.length - 1]; // самый дорогой
 
       const diffPercent = ((sellPrice - buyPrice) / buyPrice) * 100;
 
@@ -270,7 +272,7 @@ async function checkOnce() {
 
   const delay =
     CHECK_MIN_DELAY_MS +
-    Math.floor(Math.random() * (CHECK_MAX_DELAY_MS - CHECK_MIN_DELAY_MS));
+    Math.floor(Math.random() * (CHECK_MAX_DELAY_MS - CHECK_MAX_DELAY_MS));
   setTimeout(checkOnce, delay);
 }
 
