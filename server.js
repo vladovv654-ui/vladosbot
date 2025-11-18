@@ -5,8 +5,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // 🔑 ТВОЙ TELEGRAM
-const TELEGRAM_TOKEN = "8337128684:AAFJX-kThFxmcxE-im6S1mRs18mAmjE_Ops"
-
+const TELEGRAM_TOKEN = "8567894849:AAFUfYXmV3YIGWyFcsVEMRL_Y33I7YENGNg";
 const TELEGRAM_CHAT_ID = 619516861;
 
 // МОНЕТЫ И БИРЖИ
@@ -71,7 +70,6 @@ function exName(code) {
 
 function getNYDateObj(ms) {
   const date = ms ? new Date(ms) : new Date();
-  // toLocaleString даёт строку в нужном поясе, но нам нужны компоненты
   const str = date.toLocaleString("ru-RU", {
     timeZone: "America/New_York",
     hour12: false,
@@ -117,6 +115,8 @@ async function sendTelegram(text) {
     const data = await res.json();
     if (!data.ok) {
       console.error("Ошибка Telegram:", data);
+    } else {
+      console.log("Отправлено в Telegram");
     }
   } catch (e) {
     console.error("Ошибка отправки в Telegram:", e.message);
@@ -213,7 +213,7 @@ async function checkOnce() {
   for (const coin of COINS) {
     try {
       const prices = await getPrices(coin);
-      const entries = Object.entries(prices); // [ ['binance', 24.5], ['crypto', 24.8], ... ]
+      const entries = Object.entries(prices);
 
       if (entries.length < 2) continue;
 
@@ -225,7 +225,6 @@ async function checkOnce() {
       const diffPercent = ((sellPrice - buyPrice) / buyPrice) * 100;
 
       if (diffPercent < THRESHOLD) {
-        // даже если сигнал не шлём, всё равно можно обновить статистику для отчёта
         updateStats(coin, buyEx, sellEx, buyPrice, sellPrice, diffPercent);
         continue;
       }
@@ -235,7 +234,6 @@ async function checkOnce() {
       let shouldSend = false;
 
       if (!prev) {
-        // первый раз нашли окно
         shouldSend = true;
       } else {
         const minutesPassed = (now - prev.lastTime) / 60000;
@@ -247,12 +245,9 @@ async function checkOnce() {
         }
       }
 
-      // обновляем статистику для отчёта
       updateStats(coin, buyEx, sellEx, buyPrice, sellPrice, diffPercent);
 
-      if (!shouldSend) {
-        continue;
-      }
+      if (!shouldSend) continue;
 
       lastSignals[key] = {
         lastSpread: diffPercent,
@@ -273,7 +268,6 @@ async function checkOnce() {
     }
   }
 
-  // планируем следующий запуск
   const delay =
     CHECK_MIN_DELAY_MS +
     Math.floor(Math.random() * (CHECK_MAX_DELAY_MS - CHECK_MIN_DELAY_MS));
@@ -324,7 +318,6 @@ async function sendSummary() {
 
   await sendTelegram(text);
 
-  // обнуляем статистику и стартовое время
   for (const coin of COINS) {
     stats[coin] = { maxDiff: 0 };
   }
@@ -332,7 +325,6 @@ async function sendSummary() {
 }
 
 function startSummaryTimer() {
-  // первый отчёт через 3 часа
   setInterval(sendSummary, SUMMARY_INTERVAL_MS);
 }
 
