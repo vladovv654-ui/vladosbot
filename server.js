@@ -5,8 +5,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // 🔑 ТВОЙ TELEGRAM (НЕ МЕНЯЮ)
-const TELEGRAM_TOKEN =
-  "7795199727:AAF3bS3T905-wDuVz0901qp8Wk2p41r3igk";
+const TELEGRAM_TOKEN = "8214118277:AAGcV-HgMPvuKX2R-0bSsdE3Mj8q_Z0Q9RM";
 const TELEGRAM_CHAT_ID = 619516861;
 
 // МОНЕТЫ И БИРЖИ
