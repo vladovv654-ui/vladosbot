@@ -4,7 +4,7 @@ import fetch from "node-fetch";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// 🔑 ТВОЙ TELEGRAM
+// 🔑 ТВОЙ TELEGRAM (НЕ МЕНЯЮ)
 const TELEGRAM_TOKEN =
   "7795199727:AAF3bS3T905-wDuVz0901qp8Wk2p41r3igk";
 const TELEGRAM_CHAT_ID = 619516861;
@@ -113,12 +113,9 @@ async function sendTelegram(text) {
         parse_mode: "Markdown",
       }),
     });
-    const data = await res.json();
-    if (!data.ok) {
-      console.error("Ошибка Telegram:", data);
-    } else {
-      console.log("Отправлено в Telegram");
-    }
+
+    const bodyText = await res.text();
+    console.log("Ответ Telegram:", res.status, bodyText);
   } catch (e) {
     console.error("Ошибка отправки в Telegram:", e.message);
   }
@@ -221,8 +218,7 @@ async function checkOnce() {
       // сортируем по цене
       entries.sort((a, b) => a[1] - b[1]);
       const [buyEx, buyPrice] = entries[0]; // самый дешёвый
-      const [sellEx, sellPrice] =
-        entries[entries.length - 1]; // самый дорогой
+      const [sellEx, sellPrice] = entries[entries.length - 1]; // самый дорогой
 
       const diffPercent = ((sellPrice - buyPrice) / buyPrice) * 100;
 
@@ -270,9 +266,12 @@ async function checkOnce() {
     }
   }
 
+  // 🔧 тут у тебя была ошибка: CHECK_MAX_DELAY_MS - CHECK_MAX_DELAY_MS (всегда 0)
   const delay =
     CHECK_MIN_DELAY_MS +
-    Math.floor(Math.random() * (CHECK_MAX_DELAY_MS - CHECK_MAX_DELAY_MS));
+    Math.floor(Math.random() * (CHECK_MAX_DELAY_MS - CHECK_MIN_DELAY_MS));
+
+  console.log(`Следующая проверка через ${delay} мс`);
   setTimeout(checkOnce, delay);
 }
 
@@ -338,8 +337,11 @@ app.get("/", (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Server started on port ${PORT}`);
-});
 
-// старт
-checkOnce();
-startSummaryTimer();
+  // 🔔 СТАРТОВОЕ СООБЩЕНИЕ В TELEGRAM ПРИ ЗАПУСКЕ
+  sendTelegram("🚀 Vlados arbitrage bot запущен, начинаю мониторинг спреда.");
+
+  // старт цикла и отчётов
+  checkOnce();
+  startSummaryTimer();
+});
