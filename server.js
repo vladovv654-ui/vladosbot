@@ -1,5 +1,5 @@
 // server.js
-// Arbitrage bot: Binance US + Kraken + Coinbase + Gemini + Bitstamp
+// Полная версия без Crypto.com
 
 import express from "express";
 import fetch from "node-fetch";
@@ -7,135 +7,33 @@ import fetch from "node-fetch";
 const app = express();
 app.use(express.json());
 
-// === НАСТРОЙКИ TELEGRAM ===
+const PORT = process.env.PORT || 8080;
 
-// Токен бота берём из переменной Railway: BOT_TOKEN
-const TELEGRAM_TOKEN = process.env.BOT_TOKEN;
+// ====== НАСТРОЙКИ БОТА ======
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const TELEGRAM_CHAT_ID = 619516861; // твой ID
+const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
-// Твой Telegram ID (куда бот шлёт сигналы и логи)
-const TELEGRAM_CHAT_ID = 619516861;
-const ADMIN_CHAT_ID = TELEGRAM_CHAT_ID;
-
-// Порт для Railway
-const PORT = process.env.PORT || 3000;
-
-// Адрес сервера (домен Railway, можно захардкодить, если что)
-const RAILWAY_URL =
-  process.env.RAILWAY_PUBLIC_DOMAIN ||
-  "https://vladosbot-production.up.railway.app";
-
-if (!TELEGRAM_TOKEN) {
-  console.error("❌ Нет TELEGRAM_TOKEN в переменных окружения!");
-}
-
-const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
-
-// === ПАРАМЕТРЫ БОТА ===
-
-// 4 монеты
+// монеты
 const COINS = ["SOL", "LTC", "XRP", "ADA"];
 
-// Эмодзи монет
-const COIN_EMOJI = {
-  SOL: "🔥",
-  LTC: "⚪️",
-  XRP: "💎",
-  ADA: "🔵",
-};
+// биржи
+const EXCHANGES = ["Binance US", "Kraken", "Coinbase", "Gemini", "Bitstamp"];
 
-// Эмодзи валюты
-const USD_EMOJI = "💵";
+// минимальный спред
+const MIN_SPREAD = 1.3; // %
 
-// Минимальный спред в %
-const MIN_SPREAD = 1.3;
+const CHECK_INTERVAL_MS = 30 * 1000; // каждые 30 сек
+const ANTI_SPAM_MS = 5 * 60 * 1000; // 5 минут
+const ANALYTICS_INTERVAL_MS = 3 * 60 * 60 * 1000; // 3 часа
 
-// Антиспам 5 минут
-const ANTISPAM_MINUTES = 5;
+// антиспам по сигналам: {coin|buy|sell: timestamp}
+const lastSignalTime = {};
 
-// Проверка каждые 30 секунд
-const CHECK_INTERVAL_MS = 30 * 1000;
+// для аналитики
+const signalHistory = []; // {time, coin, buy, sell, spread}
 
-// Аналитика раз в 3 часа
-const ANALYTICS_INTERVAL_MS = 3 * 60 * 60 * 1000;
-
-// История сигналов (для аналитики)
-let signalsHistory = [];
-
-// Последнее время сигнала по ключу "COIN-BUY-SELL"
-const lastSignalTime = new Map();
-
-// === БИРЖИ ===
-//
-// Все 5 бирж участвуют в сигналах и аналитике.
-// name: { async getPrice(symbol) }
-
-const EXCHANGES = {
-  "Binance US": {
-    async getPrice(symbol) {
-      const pair = symbol + "USDT"; // SOLUSDT, LTCUSDT, ...
-      const url = `https://api.binance.us/api/v3/ticker/price?symbol=${pair}`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("Binance US response not ok");
-      const data = await res.json();
-      return parseFloat(data.price);
-    },
-  },
-
-  Kraken: {
-    async getPrice(symbol) {
-      // SOLUSD, LTCUSD, XRPUSD, ADAUSD
-      const pair = symbol + "USD";
-      const url = `https://api.kraken.com/0/public/Ticker?pair=${pair}`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("Kraken response not ok");
-      const data = await res.json();
-      const resultKey = Object.keys(data.result || {})[0];
-      if (!resultKey) throw new Error("Kraken no result key");
-      const ticker = data.result[resultKey];
-      return parseFloat(ticker.c[0]); // last trade price
-    },
-  },
-
-  Coinbase: {
-    async getPrice(symbol) {
-      // SOL-USD, LTC-USD, XRP-USD, ADA-USD
-      const pair = symbol + "-USD";
-      const url = `https://api.exchange.coinbase.com/products/${pair}/ticker`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("Coinbase response not ok");
-      const data = await res.json();
-      return parseFloat(data.price || data.last);
-    },
-  },
-
-  Gemini: {
-    async getPrice(symbol) {
-      // solusd, ltcusd, xrpusd, adausd
-      const pair = (symbol + "usd").toLowerCase();
-      const url = `https://api.gemini.com/v1/pubticker/${pair}`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("Gemini response not ok");
-      const data = await res.json();
-      return parseFloat(data.last);
-    },
-  },
-
-  Bitstamp: {
-    async getPrice(symbol) {
-      // solusd, ltcusd, xrpusd, adausd
-      const pair = (symbol + "usd").toLowerCase();
-      const url = `https://www.bitstamp.net/api/v2/ticker/${pair}/`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("Bitstamp response not ok");
-      const data = await res.json();
-      return parseFloat(data.last);
-    },
-  },
-};
-
-// === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
-
-// Время Нью-Йорка HH:MM
+// ====== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======
 function nyTimeString(date = new Date()) {
   return date.toLocaleTimeString("en-US", {
     timeZone: "America/New_York",
@@ -145,280 +43,386 @@ function nyTimeString(date = new Date()) {
   });
 }
 
-// Отправка сообщения в Telegram
-async function sendTelegramMessage(chatId, text) {
-  if (!TELEGRAM_TOKEN) {
-    console.error("Нет TELEGRAM_TOKEN, не могу отправить сообщение");
-    return;
-  }
-
+async function sendTelegramMessage(text) {
   try {
-    const url = `${TELEGRAM_API}/sendMessage`;
-    const res = await fetch(url, {
+    await fetch(`${TELEGRAM_API}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        chat_id: chatId,
+        chat_id: TELEGRAM_CHAT_ID,
         text,
         parse_mode: "HTML",
       }),
     });
-
-    const data = await res.json();
-    if (!data.ok) {
-      console.error("Ошибка отправки в Telegram:", data);
-    }
   } catch (err) {
-    console.error("Сетевая ошибка отправки в Telegram:", err.message);
+    console.error("Error sending Telegram message:", err.message);
   }
 }
 
-// Логи в Telegram
 async function logToTelegram(text) {
-  await sendTelegramMessage(ADMIN_CHAT_ID, `📝 LOG:\n${text}`);
+  await sendTelegramMessage(`📝 LOG:\n${text}`);
 }
 
-// Получить все цены по всем биржам и монетам
+// эмодзи для монет
+function coinEmoji(symbol) {
+  switch (symbol) {
+    case "SOL":
+      return "🟣";
+    case "LTC":
+      return "⚪️";
+    case "XRP":
+      return "💎";
+    case "ADA":
+      return "🔵";
+    default:
+      return "🟡";
+  }
+}
+
+// ====== ПОЛУЧЕНИЕ ЦЕН С БИРЖ ======
+async function fetchBinanceUS(coin) {
+  try {
+    const symbol = `${coin}USD`;
+    const url = `https://api.binance.us/api/v3/ticker/price?symbol=${symbol}`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return parseFloat(data.price);
+  } catch {
+    return null;
+  }
+}
+
+async function fetchKraken(coin) {
+  try {
+    const pair = `${coin}USD`;
+    const url = `https://api.kraken.com/0/public/Ticker?pair=${pair}`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const key = Object.keys(data.result || {})[0];
+    if (!key) return null;
+    const last = data.result[key].c?.[0];
+    return last ? parseFloat(last) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchCoinbase(coin) {
+  try {
+    const url = `https://api.exchange.coinbase.com/products/${coin}-USD/ticker`;
+    const res = await fetch(url, {
+      headers: { "User-Agent": "vlados-arb-bot" },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.price ? parseFloat(data.price) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchGemini(coin) {
+  try {
+    const symbol = `${coin.toLowerCase()}usd`;
+    const url = `https://api.gemini.com/v1/pubticker/${symbol}`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.last) return null;
+    return parseFloat(data.last);
+  } catch {
+    return null;
+  }
+}
+
+async function fetchBitstamp(coin) {
+  try {
+    const symbol = `${coin.toLowerCase()}usd`;
+    const url = `https://www.bitstamp.net/api/v2/ticker/${symbol}`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.last) return null;
+    return parseFloat(data.last);
+  } catch {
+    return null;
+  }
+}
+
+// общая функция получения цен
 async function fetchAllPrices() {
-  const snapshot = {};
+  const prices = {}; // {exchange: {coin: price}}
 
-  for (const [name, ex] of Object.entries(EXCHANGES)) {
-    snapshot[name] = {};
-    for (const symbol of COINS) {
-      try {
-        const price = await ex.getPrice(symbol);
-        if (!isFinite(price) || price <= 0) {
-          snapshot[name][symbol] = null;
-        } else {
-          snapshot[name][symbol] = price;
-        }
-      } catch (err) {
-        console.error(`Ошибка цены ${name} ${symbol}:`, err.message);
-        snapshot[name][symbol] = null;
-      }
-    }
+  for (const ex of EXCHANGES) {
+    prices[ex] = {};
   }
 
-  console.log("Prices snapshot:", JSON.stringify(snapshot, null, 2));
-  return snapshot;
-}
+  for (const coin of COINS) {
+    // Binance US
+    prices["Binance US"][coin] = await fetchBinanceUS(coin);
 
-// Проверка антиспама для пары (symbol, buyEx, sellEx)
-function shouldSendSignal(key) {
-  const now = Date.now();
-  const last = lastSignalTime.get(key) || 0;
-  if (now - last < ANTISPAM_MINUTES * 60 * 1000) {
-    return false;
+    // Kraken
+    prices["Kraken"][coin] = await fetchKraken(coin);
+
+    // Coinbase
+    prices["Coinbase"][coin] = await fetchCoinbase(coin);
+
+    // Gemini (если нет монеты — вернёт null)
+    prices["Gemini"][coin] = await fetchGemini(coin);
+
+    // Bitstamp (если нет монеты — null)
+    prices["Bitstamp"][coin] = await fetchBitstamp(coin);
   }
-  lastSignalTime.set(key, now);
-  return true;
+
+  console.log("Prices snapshot:", JSON.stringify(prices, null, 2));
+  return prices;
 }
 
-// === ОСНОВНОЙ АРБИТРАЖ ===
-
+// ====== АРБИТРАЖНЫЙ ЦИКЛ ======
 async function runArbitrage() {
   try {
     const prices = await fetchAllPrices();
-    const exchangeNames = Object.keys(EXCHANGES);
 
-    for (const symbol of COINS) {
-      for (let i = 0; i < exchangeNames.length; i++) {
-        const buyName = exchangeNames[i];
-        const buyPrice = prices[buyName][symbol];
-        if (!buyPrice) continue;
+    const now = new Date();
+    const timeStr = nyTimeString(now);
 
-        for (let j = 0; j < exchangeNames.length; j++) {
+    for (const coin of COINS) {
+      const coinPrices = [];
+
+      for (const ex of EXCHANGES) {
+        const p = prices[ex][coin];
+        if (p && !isNaN(p)) {
+          coinPrices.push({ exchange: ex, price: p });
+        }
+      }
+
+      // перебираем все пары бирж
+      for (let i = 0; i < coinPrices.length; i++) {
+        for (let j = 0; j < coinPrices.length; j++) {
           if (i === j) continue;
 
-          const sellName = exchangeNames[j];
-          const sellPrice = prices[sellName][symbol];
-          if (!sellPrice) continue;
+          const buyEx = coinPrices[i];
+          const sellEx = coinPrices[j];
 
-          const spread = ((sellPrice - buyPrice) / buyPrice) * 100;
+          if (sellEx.price <= buyEx.price) continue;
 
-          if (spread >= MIN_SPREAD) {
-            const key = `${symbol}-${buyName}-${sellName}`;
-            if (!shouldSendSignal(key)) {
-              continue;
-            }
+          const spread =
+            ((sellEx.price - buyEx.price) / buyEx.price) * 100;
 
-            const now = new Date();
-            const timeNY = nyTimeString(now);
-            const emoji = COIN_EMOJI[symbol] || "";
-            const coinLine = `${symbol} ${emoji}`; // ПРОБЕЛ после монеты
+          if (spread < MIN_SPREAD) continue;
 
-            const text =
-              `${coinLine}\n` +
-              `Купить: <b>${buyName}</b> — $${buyPrice.toFixed(4)} ${USD_EMOJI}\n` +
-              `Продать: <b>${sellName}</b> — $${sellPrice.toFixed(4)} ${USD_EMOJI}\n` +
-              `Спред: <b>${spread.toFixed(2)}%</b>\n` +
-              `Время (NY): ${timeNY}`;
+          const key = `${coin}|${buyEx.exchange}|${sellEx.exchange}`;
+          const last = lastSignalTime[key] || 0;
+          const diff = now.getTime() - last;
 
-            await sendTelegramMessage(TELEGRAM_CHAT_ID, text);
-
-            // Записываем сигнал в историю
-            signalsHistory.push({
-              ts: now.getTime(),
-              symbol,
-              buy: buyName,
-              sell: sellName,
-              spread,
-            });
+          if (diff < ANTI_SPAM_MS) {
+            // антиспам: слишком часто по этой паре
+            continue;
           }
+
+          lastSignalTime[key] = now.getTime();
+
+          // сохраняем в историю для аналитики
+          signalHistory.push({
+            time: now.getTime(),
+            coin,
+            buy: buyEx.exchange,
+            sell: sellEx.exchange,
+            spread,
+          });
+
+          // формируем текст сигнала
+          const emoji = coinEmoji(coin);
+          const text =
+            `${coin} ${emoji}\n` +
+            `Купить: <b>${buyEx.exchange}</b> — $${buyEx.price.toFixed(4)} 💵\n` +
+            `Продать: <b>${sellEx.exchange}</b> — $${sellEx.price.toFixed(4)} 💵\n\n` +
+            `Спред: <b>${spread.toFixed(2)}%</b>\n` +
+            `Время (NY): ${timeStr}`;
+
+          await sendTelegramMessage(text);
         }
       }
     }
-
-    // чистим историю старше 6 часов
-    const cutoff = Date.now() - 6 * 60 * 60 * 1000;
-    signalsHistory = signalsHistory.filter((s) => s.ts >= cutoff);
   } catch (err) {
-    console.error("Ошибка в runArbitrage:", err.message);
+    console.error("Arbitrage loop error:", err.message);
+    await logToTelegram(`Arbitrage error: ${err.message}`);
   }
 }
 
-// === АНАЛИТИКА КАЖДЫЕ 3 ЧАСА ===
-
+// ====== АНАЛИТИКА КАЖДЫЕ 3 ЧАСА ======
 async function sendAnalytics() {
-  const now = Date.now();
-  const fromTs = now - 3 * 60 * 60 * 1000;
+  try {
+    const now = Date.now();
+    const fromTime = now - 3 * 60 * 60 * 1000;
 
-  const recent = signalsHistory.filter((s) => s.ts >= fromTs);
+    // чистим старую историю
+    const recent = signalHistory.filter((s) => s.time >= fromTime);
+    // заменяем массив
+    signalHistory.length = 0;
+    signalHistory.push(...recent);
 
-  if (recent.length === 0) {
-    await sendTelegramMessage(
-      ADMIN_CHAT_ID,
-      `📊 Аналитика за 3 часа (NY):\n\nСигналов не было.`
+    if (recent.length === 0) {
+      await logToTelegram(
+        "Аналитика за 3 часа: сигналов не было."
+      );
+      return;
+    }
+
+    const totalSignals = recent.length;
+    const totalSpread = recent.reduce(
+      (acc, s) => acc + s.spread,
+      0
     );
-    return;
-  }
+    const avgSpread = totalSpread / totalSignals;
 
-  const totalSignals = recent.length;
-  const totalSpread = recent.reduce((sum, s) => sum + s.spread, 0);
-  const avgSpread = totalSpread / totalSignals;
+    // статистика по монетам
+    const byCoin = {};
+    // статистика по парам бирж
+    const byPair = {};
 
-  // По монетам
-  const byCoin = {};
-  for (const s of recent) {
-    if (!byCoin[s.symbol]) {
-      byCoin[s.symbol] = { count: 0, sumSpread: 0 };
+    for (const s of recent) {
+      if (!byCoin[s.coin]) {
+        byCoin[s.coin] = { count: 0, sumSpread: 0 };
+      }
+      byCoin[s.coin].count += 1;
+      byCoin[s.coin].sumSpread += s.spread;
+
+      const pKey = `${s.buy} → ${s.sell}`;
+      if (!byPair[pKey]) {
+        byPair[pKey] = { count: 0, sumSpread: 0 };
+      }
+      byPair[pKey].count += 1;
+      byPair[pKey].sumSpread += s.spread;
     }
-    byCoin[s.symbol].count += 1;
-    byCoin[s.symbol].sumSpread += s.spread;
-  }
 
-  // Топ монета
-  let bestCoin = null;
-  let bestCoinAvg = 0;
+    // топ монета
+    const topCoin = Object.entries(byCoin).sort(
+      (a, b) => b[1].count - a[1].count
+    )[0];
 
-  for (const [symbol, stat] of Object.entries(byCoin)) {
-    const avg = stat.sumSpread / stat.count;
-    if (!bestCoin || avg > bestCoinAvg) {
-      bestCoin = symbol;
-      bestCoinAvg = avg;
+    // топ пара бирж
+    const topPair = Object.entries(byPair).sort(
+      (a, b) => b[1].count - a[1].count
+    )[0];
+
+    let coinLines = "";
+    for (const [coin, st] of Object.entries(byCoin)) {
+      const avg = st.sumSpread / st.count;
+      coinLines += `${coin}: ${st.count} сигнал(ов), средний спред ${avg.toFixed(
+        2
+      )}%\n`;
     }
-  }
 
-  // Пары "монета | buy → sell"
-  const byPair = {};
-  for (const s of recent) {
-    const key = `${s.symbol} | ${s.buy} → ${s.sell}`;
-    if (!byPair[key]) {
-      byPair[key] = { count: 0, sumSpread: 0 };
+    let pairLines = "";
+    for (const [pair, st] of Object.entries(byPair)) {
+      const avg = st.sumSpread / st.count;
+      pairLines += `${pair}: ${st.count} сигнал(ов), средний спред ${avg.toFixed(
+        2
+      )}%\n`;
     }
-    byPair[key].count += 1;
-    byPair[key].sumSpread += s.spread;
+
+    const text =
+      `📊 Аналитика арбитража за 3 часа (NY время):\n\n` +
+      `Всего сигналов: <b>${totalSignals}</b>\n` +
+      `Суммарный процент спредов: <b>${totalSpread.toFixed(
+        2
+      )}%</b>\n` +
+      `Средний спред по всем сигналам: <b>${avgSpread.toFixed(
+        2
+      )}%</b>\n\n` +
+      `<b>По монетам:</b>\n${coinLines}\n` +
+      `<b>По парам бирж:</b>\n${pairLines}\n` +
+      (topCoin
+        ? `\nТоп монета: <b>${topCoin[0]}</b> (${topCoin[1].count} сигналов)`
+        : "") +
+      (topPair
+        ? `\nТоп пара бирж: <b>${topPair[0]}</b> (${topPair[1].count} сигналов)`
+        : "");
+
+    await sendTelegramMessage(text);
+  } catch (err) {
+    console.error("Analytics error:", err.message);
+    await logToTelegram(`Analytics error: ${err.message}`);
   }
-
-  let bestPair = null;
-  let bestPairAvg = 0;
-  for (const [pair, stat] of Object.entries(byPair)) {
-    const avg = stat.sumSpread / stat.count;
-    if (!bestPair || avg > bestPairAvg) {
-      bestPair = pair;
-      bestPairAvg = avg;
-    }
-  }
-
-  let text = `📊 Аналитика арбитража за последние 3 часа (NY):\n\n`;
-  text += `Всего сигналов: <b>${totalSignals}</b>\n`;
-  text += `Средний спред: <b>${avgSpread.toFixed(2)}%</b>\n`;
-  text += `Суммарный спред: <b>${totalSpread.toFixed(2)}%</b>\n\n`;
-
-  text += `По монетам:\n`;
-  for (const [symbol, stat] of Object.entries(byCoin)) {
-    const avg = stat.sumSpread / stat.count;
-    text += `• ${symbol}: ${stat.count} сигналов, средний спред ${avg.toFixed(
-      2
-    )}%\n`;
-  }
-
-  text += `\nТоп монета: <b>${bestCoin}</b> (ср. спред ${bestCoinAvg.toFixed(
-    2
-  )}%)\n`;
-  text += `Топ пара: <b>${bestPair}</b> (ср. спред ${bestPairAvg.toFixed(
-    2
-  )}%)`;
-
-  await sendTelegramMessage(ADMIN_CHAT_ID, text);
 }
 
-// === TELEGRAM WEBHOOK ===
-
+// ====== TELEGRAM WEBHOOK ======
 app.post("/webhook", async (req, res) => {
-  res.sendStatus(200);
-
   const update = req.body;
+
   try {
     if (update.message) {
       const chatId = update.message.chat.id;
       const text = update.message.text || "";
 
-      if (text.startsWith("/start")) {
-        await sendTelegramMessage(chatId, "Бот активирован ✅ Я в сети.");
+      console.log("Incoming message:", update.message);
+
+      if (text === "/start") {
+        await fetch(`${TELEGRAM_API}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: "Бот активирован ✅ Я в сети.",
+          }),
+        });
       }
     }
   } catch (err) {
-    console.error("Ошибка обработки апдейта:", err.message);
+    console.error("Webhook error:", err.message);
   }
+
+  res.sendStatus(200);
 });
 
-// Корневая страница
-app.get("/", (req, res) => {
-  res.send("Arbitrage bot is running ✅");
+// простой GET для проверки
+app.get("/", async (_req, res) => {
+  res.send("Test message sent to Telegram");
 });
 
-// Установка webhook
-async function setWebhook() {
-  if (!TELEGRAM_TOKEN) return;
-  const base = RAILWAY_URL.replace(/\/+$/, "");
-  const webhookUrl = `${base}/webhook`;
-  const url = `${TELEGRAM_API}/setWebhook`;
-
+// установка вебхука при старте
+async function setupWebhook() {
   try {
-    const res = await fetch(url, {
+    const domain =
+      process.env.RAILWAY_PUBLIC_DOMAIN ||
+      process.env.WEBHOOK_URL; // можно задать вручную
+
+    if (!domain) {
+      console.log("Webhook domain is not set, skip setWebhook");
+      return;
+    }
+
+    const url = domain.startsWith("http")
+      ? `${domain}/webhook`
+      : `https://${domain}/webhook`;
+
+    const res = await fetch(`${TELEGRAM_API}/setWebhook`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: webhookUrl }),
+      body: JSON.stringify({ url }),
     });
+
     const data = await res.json();
     console.log("setWebhook result:", data);
-    await logToTelegram(
-      `Webhook: ${data.ok ? "OK" : "ERROR"} (${webhookUrl})`
-    );
+    await logToTelegram(`Webhook: ${data.ok ? "OK" : "FAIL"} (${url})`);
   } catch (err) {
-    console.error("Ошибка setWebhook:", err.message);
+    console.error("setWebhook error:", err.message);
   }
 }
 
-// === ЗАПУСК СЕРВЕРА ===
-
-app.listen(PORT, () => {
+// ====== ЗАПУСК СЕРВЕРА ======
+app.listen(PORT, async () => {
+  console.log("Starting Container");
   console.log(`Server started on port ${PORT}`);
-  setWebhook();
-  // арбитраж
-  runArbitrage();
+
+  await setupWebhook();
+
+  console.log("Starting arbitrage loop...");
+  // арбитраж каждые 30 сек
   setInterval(runArbitrage, CHECK_INTERVAL_MS);
-  // аналитика
+  // аналитика каждые 3 часа
   setInterval(sendAnalytics, ANALYTICS_INTERVAL_MS);
 });
