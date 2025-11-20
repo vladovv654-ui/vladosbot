@@ -1,5 +1,5 @@
 // server.js
-// Владос-бот: Crypto.com, TRX без Binance US, спред 1.1%, повтор пары каждые 5 минут
+// Vlados arbitrage bot: Binance US + Kraken + Crypto.com, spread 1.1%, повтор пары раз в 5 минут
 
 import express from "express";
 import fetch from "node-fetch";
@@ -10,8 +10,8 @@ app.use(express.json());
 const PORT = process.env.PORT || 8080;
 
 // ====== НАСТРОЙКИ БОТА ======
-const BOT_TOKEN = "8214118277:AAG0BJyoEZ76LbB5bnN1zGfqZ5oivu4khxA"; // твой токен
-const TELEGRAM_CHAT_ID = 619516861; // твой Telegram ID
+const BOT_TOKEN = "8214118277:AAG0BJyoEZ76LbB5bnN1zGfqZ5oivu4khxA";
+const TELEGRAM_CHAT_ID = 619516861;
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 
 // ====== КОНФИГ АРБИТРАЖА ======
@@ -19,22 +19,15 @@ const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
 // монеты
 const COINS = ["SOL", "LTC", "XRP", "ADA", "TRX"];
 
-// биржи
-const EXCHANGES = [
-  "Binance US",
-  "Kraken",
-  "Crypto.com",
-  "Coinbase",
-  "Gemini",
-  "Bitstamp",
-];
+// биржи — только три
+const EXCHANGES = ["Binance US", "Kraken", "Crypto.com"];
 
 // минимальный спред
 const MIN_SPREAD = 1.1; // %
 
 // интервалы
-const CHECK_INTERVAL_MS = 30 * 1000; // проверка каждые 30 секунд
-const REPEAT_INTERVAL_MS = 5 * 60 * 1000; // ту же пару слать не чаще, чем раз в 5 минут
+const CHECK_INTERVAL_MS = 30 * 1000;          // проверка каждые 30 секунд
+const REPEAT_INTERVAL_MS = 5 * 60 * 1000;     // ту же пару слать не чаще 1 раза в 5 минут
 const ANALYTICS_INTERVAL_MS = 3 * 60 * 60 * 1000; // аналитика каждые 3 часа
 
 // время последнего сигнала по паре: { "SOL|Binance US|Kraken": timestamp }
@@ -76,18 +69,12 @@ async function logToTelegram(text) {
 // эмодзи для монет
 function coinEmoji(symbol) {
   switch (symbol) {
-    case "SOL":
-      return "🟣";
-    case "LTC":
-      return "⚪️";
-    case "XRP":
-      return "💎";
-    case "ADA":
-      return "🔵";
-    case "TRX":
-      return "🔺";
-    default:
-      return "🟡";
+    case "SOL": return "🟣";
+    case "LTC": return "⚪️";
+    case "XRP": return "💎";
+    case "ADA": return "🔵";
+    case "TRX": return "🔺";
+    default: return "🟡";
   }
 }
 
@@ -96,7 +83,7 @@ function coinEmoji(symbol) {
 // Binance US — TRX полностью игнорируем
 async function fetchBinanceUS(coin) {
   try {
-    if (coin === "TRX") return null; // TRX на Binance US даёт мусор
+    if (coin === "TRX") return null; // TRX на Binance US мусорный
 
     const symbol = `${coin}USD`;
     const url = `https://api.binance.us/api/v3/ticker/price?symbol=${symbol}`;
@@ -109,6 +96,7 @@ async function fetchBinanceUS(coin) {
   }
 }
 
+// Kraken
 async function fetchKraken(coin) {
   try {
     const pair = `${coin}USD`;
@@ -125,7 +113,7 @@ async function fetchKraken(coin) {
   }
 }
 
-// Crypto.com
+// Crypto.com — ПРАВИЛЬНАЯ ВЕРСИЯ
 async function fetchCryptoCom(coin) {
   try {
     const instrument = `${coin}_USD`;
@@ -134,54 +122,17 @@ async function fetchCryptoCom(coin) {
     if (!res.ok) return null;
     const data = await res.json();
 
-    const price =
-      data?.result?.data?.a ??
-      data?.result?.data?.last_trade_price ??
+    const arr = data?.result?.data;
+    if (!Array.isArray(arr) || arr.length === 0) return null;
+
+    const obj = arr[0];
+    const priceStr =
+      obj.a ??
+      obj.last_trade_price ??
+      obj.c ??
       null;
 
-    return price ? parseFloat(price) : null;
-  } catch {
-    return null;
-  }
-}
-
-async function fetchCoinbase(coin) {
-  try {
-    const url = `https://api.exchange.coinbase.com/products/${coin}-USD/ticker`;
-    const res = await fetch(url, {
-      headers: { "User-Agent": "vlados-arb-bot" },
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.price ? parseFloat(data.price) : null;
-  } catch {
-    return null;
-  }
-}
-
-async function fetchGemini(coin) {
-  try {
-    const symbol = `${coin.toLowerCase()}usd`;
-    const url = `https://api.gemini.com/v1/pubticker/${symbol}`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (!data.last) return null;
-    return parseFloat(data.last);
-  } catch {
-    return null;
-  }
-}
-
-async function fetchBitstamp(coin) {
-  try {
-    const symbol = `${coin.toLowerCase()}usd`;
-    const url = `https://www.bitstamp.net/api/v2/ticker/${symbol}`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (!data.last) return null;
-    return parseFloat(data.last);
+    return priceStr ? parseFloat(priceStr) : null;
   } catch {
     return null;
   }
@@ -197,11 +148,8 @@ async function fetchAllPrices() {
 
   for (const coin of COINS) {
     prices["Binance US"][coin] = await fetchBinanceUS(coin);
-    prices["Kraken"][coin] = await fetchKraken(coin);
+    prices["Kraken"][coin]     = await fetchKraken(coin);
     prices["Crypto.com"][coin] = await fetchCryptoCom(coin);
-    prices["Coinbase"][coin] = await fetchCoinbase(coin);
-    prices["Gemini"][coin] = await fetchGemini(coin);
-    prices["Bitstamp"][coin] = await fetchBitstamp(coin);
   }
 
   console.log("Prices snapshot:", JSON.stringify(prices, null, 2));
@@ -213,7 +161,7 @@ async function runArbitrage() {
   try {
     const prices = await fetchAllPrices();
 
-    const now = new Date();
+    const now   = new Date();
     const nowMs = now.getTime();
     const timeStr = nyTimeString(now);
 
@@ -222,17 +170,14 @@ async function runArbitrage() {
 
       for (const ex of EXCHANGES) {
         const p = prices[ex][coin];
-        if (p && !isNaN(p)) {
-          coinPrices.push({ exchange: ex, price: p });
-        }
+        if (p && !isNaN(p)) coinPrices.push({ exchange: ex, price: p });
       }
 
-      // перебираем все пары бирж
       for (let i = 0; i < coinPrices.length; i++) {
         for (let j = 0; j < coinPrices.length; j++) {
           if (i === j) continue;
 
-          const buyEx = coinPrices[i];
+          const buyEx  = coinPrices[i];
           const sellEx = coinPrices[j];
 
           if (sellEx.price <= buyEx.price) continue;
@@ -242,16 +187,15 @@ async function runArbitrage() {
 
           if (spread < MIN_SPREAD) continue;
 
-          const key = `${coin}|${buyEx.exchange}|${sellEx.exchange}`;
+          const key  = `${coin}|${buyEx.exchange}|${sellEx.exchange}`;
           const last = lastSignalTime[key] || 0;
           const diff = nowMs - last;
 
-          // антиспам ТОЛЬКО как "раз в 5 минут по этой паре"
+          // та же пара не чаще 1 раза в 5 минут
           if (diff < REPEAT_INTERVAL_MS) continue;
 
           lastSignalTime[key] = nowMs;
 
-          // сохраняем в историю для аналитики
           signalHistory.push({
             time: nowMs,
             coin,
@@ -281,7 +225,7 @@ async function runArbitrage() {
 // ====== АНАЛИТИКА КАЖДЫЕ 3 ЧАСА ======
 async function sendAnalytics() {
   try {
-    const now = Date.now();
+    const now      = Date.now();
     const fromTime = now - 3 * 60 * 60 * 1000;
 
     const recent = signalHistory.filter((s) => s.time >= fromTime);
@@ -294,8 +238,8 @@ async function sendAnalytics() {
     }
 
     const totalSignals = recent.length;
-    const totalSpread = recent.reduce((acc, s) => acc + s.spread, 0);
-    const avgSpread = totalSpread / totalSignals;
+    const totalSpread  = recent.reduce((acc, s) => acc + s.spread, 0);
+    const avgSpread    = totalSpread / totalSignals;
 
     const byCoin = {};
     const byPair = {};
@@ -342,12 +286,8 @@ async function sendAnalytics() {
     const text =
       `📊 Аналитика арбитража за 3 часа (NY время):\n\n` +
       `Всего сигналов: <b>${totalSignals}</b>\n` +
-      `Суммарный процент спредов: <b>${totalSpread.toFixed(
-        2
-      )}%</b>\n` +
-      `Средний спред по всем сигналам: <b>${avgSpread.toFixed(
-        2
-      )}%</b>\n\n` +
+      `Суммарный процент спредов: <b>${totalSpread.toFixed(2)}%</b>\n` +
+      `Средний спред по всем сигналам: <b>${avgSpread.toFixed(2)}%</b>\n\n` +
       `<b>По монетам:</b>\n${coinLines || "—"}\n` +
       `<b>По парам бирж:</b>\n${pairLines || "—"}\n` +
       (topCoin
@@ -371,7 +311,7 @@ app.post("/webhook", async (req, res) => {
   try {
     if (update.message) {
       const chatId = update.message.chat.id;
-      const text = update.message.text || "";
+      const text   = update.message.text || "";
 
       console.log("Incoming message:", update.message);
 
@@ -398,41 +338,10 @@ app.get("/", async (_req, res) => {
   res.send("Vlados arbitrage bot is running");
 });
 
-// установка вебхука при старте
-async function setupWebhook() {
-  try {
-    const domain =
-      process.env.RAILWAY_PUBLIC_DOMAIN || process.env.WEBHOOK_URL;
-
-    if (!domain) {
-      console.log("Webhook domain is not set, skip setWebhook");
-      return;
-    }
-
-    const url = domain.startsWith("http")
-      ? `${domain}/webhook`
-      : `https://${domain}/webhook`;
-
-    const res = await fetch(`${TELEGRAM_API}/setWebhook`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url }),
-    });
-
-    const data = await res.json();
-    console.log("setWebhook result:", data);
-    await logToTelegram(`Webhook: ${data.ok ? "OK" : "FAIL"} (${url})`);
-  } catch (err) {
-    console.error("setWebhook error:", err.message);
-  }
-}
-
 // ====== ЗАПУСК СЕРВЕРА ======
 app.listen(PORT, async () => {
   console.log("Starting Container");
   console.log(`Server started on port ${PORT}`);
-
-  await setupWebhook();
 
   console.log("Starting arbitrage loop...");
   setInterval(runArbitrage, CHECK_INTERVAL_MS);
