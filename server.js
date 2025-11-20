@@ -1,5 +1,5 @@
 // server.js
-// Версия: Crypto.com, TRX без Binance US, спред 1.1%, повтор пары раз в 5 минут
+// Владос-бот: Crypto.com, TRX без Binance US, спред 1.1%, повтор пары каждые 5 минут
 
 import express from "express";
 import fetch from "node-fetch";
@@ -10,10 +10,11 @@ app.use(express.json());
 const PORT = process.env.PORT || 8080;
 
 // ====== НАСТРОЙКИ БОТА ======
-// ВСТАВЬ СВОЙ ТОКЕН ВМЕСТО YOUR_TELEGRAM_BOT_TOKEN
-const BOT_TOKEN = "8214118277:AAG0BJyoEZ76LbB5bnN1zGfqZ5oivu4khxA";
-const TELEGRAM_CHAT_ID = 619516861;
+const BOT_TOKEN = "8214118277:AAG0BJyoEZ76LbB5bnN1zGfqZ5oivu4khxA"; // твой токен
+const TELEGRAM_CHAT_ID = 619516861; // твой Telegram ID
 const TELEGRAM_API = `https://api.telegram.org/bot${BOT_TOKEN}`;
+
+// ====== КОНФИГ АРБИТРАЖА ======
 
 // монеты
 const COINS = ["SOL", "LTC", "XRP", "ADA", "TRX"];
@@ -32,17 +33,17 @@ const EXCHANGES = [
 const MIN_SPREAD = 1.1; // %
 
 // интервалы
-const CHECK_INTERVAL_MS = 30 * 1000;           // проверка каждые 30 сек
-const REPEAT_INTERVAL_MS = 5 * 60 * 1000;      // ту же пару слать не чаще, чем раз в 5 минут
-const ANALYTICS_INTERVAL_MS = 3 * 60 * 60 * 1000; // 3 часа
+const CHECK_INTERVAL_MS = 30 * 1000; // проверка каждые 30 секунд
+const REPEAT_INTERVAL_MS = 5 * 60 * 1000; // ту же пару слать не чаще, чем раз в 5 минут
+const ANALYTICS_INTERVAL_MS = 3 * 60 * 60 * 1000; // аналитика каждые 3 часа
 
-// время последнего сигнала по паре: {coin|buy|sell: timestamp}
+// время последнего сигнала по паре: { "SOL|Binance US|Kraken": timestamp }
 const lastSignalTime = {};
 
-// для аналитики
-const signalHistory = []; // {time, coin, buy, sell, spread}
+// история сигналов для аналитики
+const signalHistory = []; // { time, coin, buy, sell, spread }
 
-// ====== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======
+// ====== ВСПОМОГАТЕЛЬНЫЕ ======
 function nyTimeString(date = new Date()) {
   return date.toLocaleTimeString("en-US", {
     timeZone: "America/New_York",
@@ -92,11 +93,10 @@ function coinEmoji(symbol) {
 
 // ====== ПОЛУЧЕНИЕ ЦЕН С БИРЖ ======
 
-// Binance US — TRX отключаем
+// Binance US — TRX полностью игнорируем
 async function fetchBinanceUS(coin) {
   try {
-    // TRX на Binance US даёт херню — игнорируем полностью
-    if (coin === "TRX") return null;
+    if (coin === "TRX") return null; // TRX на Binance US даёт мусор
 
     const symbol = `${coin}USD`;
     const url = `https://api.binance.us/api/v3/ticker/price?symbol=${symbol}`;
@@ -128,13 +128,12 @@ async function fetchKraken(coin) {
 // Crypto.com
 async function fetchCryptoCom(coin) {
   try {
-    const symbol = `${coin}_USD`;
-    const url = `https://api.crypto.com/v2/public/get-ticker?instrument_name=${symbol}`;
+    const instrument = `${coin}_USD`;
+    const url = `https://api.crypto.com/v2/public/get-ticker?instrument_name=${instrument}`;
     const res = await fetch(url);
     if (!res.ok) return null;
     const data = await res.json();
 
-    // берем ask price (a) или last_trade_price, если нужно можно поменять
     const price =
       data?.result?.data?.a ??
       data?.result?.data?.last_trade_price ??
@@ -247,11 +246,8 @@ async function runArbitrage() {
           const last = lastSignalTime[key] || 0;
           const diff = nowMs - last;
 
-          // «антиспам» только в виде повтора раз в 5 минут
-          if (diff < REPEAT_INTERVAL_MS) {
-            // меньше 5 минут — пока не дублируем
-            continue;
-          }
+          // антиспам ТОЛЬКО как "раз в 5 минут по этой паре"
+          if (diff < REPEAT_INTERVAL_MS) continue;
 
           lastSignalTime[key] = nowMs;
 
@@ -264,7 +260,6 @@ async function runArbitrage() {
             spread,
           });
 
-          // формируем текст сигнала
           const emoji = coinEmoji(coin);
           const text =
             `${emoji} ${coin}\n` +
@@ -294,17 +289,12 @@ async function sendAnalytics() {
     signalHistory.push(...recent);
 
     if (recent.length === 0) {
-      await logToTelegram(
-        "Аналитика за 3 часа: сигналов не было."
-      );
+      await logToTelegram("Аналитика за 3 часа: сигналов не было.");
       return;
     }
 
     const totalSignals = recent.length;
-    const totalSpread = recent.reduce(
-      (acc, s) => acc + s.spread,
-      0
-    );
+    const totalSpread = recent.reduce((acc, s) => acc + s.spread, 0);
     const avgSpread = totalSpread / totalSignals;
 
     const byCoin = {};
@@ -351,4 +341,100 @@ async function sendAnalytics() {
 
     const text =
       `📊 Аналитика арбитража за 3 часа (NY время):\n\n` +
-      `Всего сигналов: <b>${total
+      `Всего сигналов: <b>${totalSignals}</b>\n` +
+      `Суммарный процент спредов: <b>${totalSpread.toFixed(
+        2
+      )}%</b>\n` +
+      `Средний спред по всем сигналам: <b>${avgSpread.toFixed(
+        2
+      )}%</b>\n\n` +
+      `<b>По монетам:</b>\n${coinLines || "—"}\n` +
+      `<b>По парам бирж:</b>\n${pairLines || "—"}\n` +
+      (topCoin
+        ? `\nТоп монета: <b>${topCoin[0]}</b> (${topCoin[1].count} сигналов)`
+        : "") +
+      (topPair
+        ? `\nТоп пара бирж: <b>${topPair[0]}</b> (${topPair[1].count} сигналов)`
+        : "");
+
+    await sendTelegramMessage(text);
+  } catch (err) {
+    console.error("Analytics error:", err.message);
+    await logToTelegram(`Analytics error: ${err.message}`);
+  }
+}
+
+// ====== TELEGRAM WEBHOOK ======
+app.post("/webhook", async (req, res) => {
+  const update = req.body;
+
+  try {
+    if (update.message) {
+      const chatId = update.message.chat.id;
+      const text = update.message.text || "";
+
+      console.log("Incoming message:", update.message);
+
+      if (text === "/start") {
+        await fetch(`${TELEGRAM_API}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            text: "Бот активирован ✅ Я в сети.",
+          }),
+        });
+      }
+    }
+  } catch (err) {
+    console.error("Webhook error:", err.message);
+  }
+
+  res.sendStatus(200);
+});
+
+// простой GET для проверки
+app.get("/", async (_req, res) => {
+  res.send("Vlados arbitrage bot is running");
+});
+
+// установка вебхука при старте
+async function setupWebhook() {
+  try {
+    const domain =
+      process.env.RAILWAY_PUBLIC_DOMAIN || process.env.WEBHOOK_URL;
+
+    if (!domain) {
+      console.log("Webhook domain is not set, skip setWebhook");
+      return;
+    }
+
+    const url = domain.startsWith("http")
+      ? `${domain}/webhook`
+      : `https://${domain}/webhook`;
+
+    const res = await fetch(`${TELEGRAM_API}/setWebhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+
+    const data = await res.json();
+    console.log("setWebhook result:", data);
+    await logToTelegram(`Webhook: ${data.ok ? "OK" : "FAIL"} (${url})`);
+  } catch (err) {
+    console.error("setWebhook error:", err.message);
+  }
+}
+
+// ====== ЗАПУСК СЕРВЕРА ======
+app.listen(PORT, async () => {
+  console.log("Starting Container");
+  console.log(`Server started on port ${PORT}`);
+
+  await setupWebhook();
+
+  console.log("Starting arbitrage loop...");
+  setInterval(runArbitrage, CHECK_INTERVAL_MS);
+  setInterval(sendAnalytics, ANALYTICS_INTERVAL_MS);
+});
